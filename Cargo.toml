@@ -1,0 +1,36 @@
+[package]
+name = "wynn-browser"
+version = "0.1.0"
+edition = "2021"
+description = "A modern GNOME web browser built with GTK4, libadwaita, and WebKitGTK"
+license = "GPL-3.0-or-later"
+authors = ["Wynn Contributors"]
+
+# ─── Dependencies ────────────────────────────────────────────────────
+#
+# gtk4          – Rust bindings for GTK 4 (widget toolkit).
+#                 The "v4_12" feature gates APIs added in GTK 4.12.
+#
+# libadwaita    – Rust bindings for libadwaita (GNOME HIG helpers).
+#                 The "v1_4" feature gates APIs added in libadwaita 1.4.
+#
+# webkit6       – Rust bindings for WebKitGTK 6.0 (web engine).
+#                 Provides WebView, navigation, and page lifecycle.
+#
+# glib          – Low-level GLib utilities used throughout GTK:
+#                 clone! macro, GString, URI helpers, idle callbacks.
+#
+# gio           – GIO bindings (application model, actions, I/O).
+#                 adw::Application is built on top of gio::Application.
+# ─────────────────────────────────────────────────────────────────────
+
+[dependencies]
+gtk4 = { version = "0.10", features = ["v4_12"] }
+libadwaita = { version = "0.8", features = ["v1_5"] }
+webkit6 = { version = "0.5", features = ["v2_42"] }
+glib = "0.21"
+gio = "0.21"
+rusqlite = { version = "0.32", features = ["bundled"] }
+argon2 = "0.5"
+aes-gcm = "0.10"
+rand = "0.8"

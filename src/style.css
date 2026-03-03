@@ -1,0 +1,677 @@
+/* ─────────────────────────────────────────────────────────────────────
+ * style.css  –  Next-gen browser UI styling for Wynn Browser (Phase 3)
+ * ─────────────────────────────────────────────────────────────────────
+ *
+ * Design philosophy:
+ *
+ *   GNOME HIG  – Flat, symbolic icons; consistent 6/12px spacing;
+ *                adw::OverlaySplitView sidebar; respects system
+ *                colour scheme (light/dark); no gratuitous decoration.
+ *
+ *   Apple HIG  – Generous padding; pill-shaped address bar; subtle
+ *                translucency; smooth transitions on every interactive
+ *                element; refined typographic hierarchy; depth via
+ *                soft shadows; high-contrast focus rings.
+ *
+ *   Next-gen   – Vertical tab sidebar, command palette overlay,
+ *                split view paned, workspace selector, glassmorphism.
+ * ───────────────────────────────────────────────────────────────────── */
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  1. GLOBAL DEFAULTS & TRANSITIONS
+ * ═══════════════════════════════════════════════════════════════════ */
+
+button,
+entry,
+tab,
+tabbar tab,
+.url-bar,
+.nav-buttons button,
+progressbar,
+image,
+row,
+.sidebar-tab-row,
+.workspace-btn {
+    transition: all 200ms ease-in-out;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  2. HEADER BAR (content area — minimal, decoration-only)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+headerbar.content-header {
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    background: none;
+    border: none;
+    box-shadow: none;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  3. NAVIGATION BUTTONS
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.nav-buttons button {
+    min-height: 34px;
+    min-width: 34px;
+    border-radius: 8px;
+    margin: 0 1px;
+    padding: 0;
+}
+
+.nav-buttons button:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.nav-buttons button:active {
+    background-color: alpha(currentColor, 0.14);
+    transition: all 80ms ease-out;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  4. ADDRESS BAR (URL BAR)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.url-bar {
+    background-color: alpha(currentColor, 0.06);
+    border-radius: 10px;
+    padding: 2px 10px;
+    margin: 4px 8px;
+    min-height: 34px;
+    border: 1px solid alpha(currentColor, 0.06);
+}
+
+.url-bar:focus-within {
+    background-color: alpha(currentColor, 0.03);
+    border-color: alpha(@accent_bg_color, 0.4);
+    box-shadow: 0 0 0 2px alpha(@accent_bg_color, 0.2);
+}
+
+.url-icon {
+    opacity: 0.4;
+    margin-right: 2px;
+    -gtk-icon-size: 14px;
+}
+
+.security-icon {
+    -gtk-icon-size: 14px;
+    margin-right: 2px;
+    opacity: 0.6;
+}
+
+.security-icon.security-secure {
+    color: #2ec27e;
+    opacity: 0.85;
+}
+
+.security-icon.security-insecure {
+    color: #e5a50a;
+    opacity: 0.85;
+}
+
+.url-entry {
+    background: none;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 30px;
+    caret-color: @accent_bg_color;
+}
+
+.url-entry:focus {
+    box-shadow: none;
+    outline: none;
+}
+
+.url-entry text placeholder {
+    color: alpha(currentColor, 0.4);
+    font-style: normal;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  5. LOADING PROGRESS BAR
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.load-progress {
+    min-height: 3px;
+    border-radius: 0;
+    background-color: transparent;
+    margin: 0;
+    padding: 0;
+}
+
+.load-progress trough {
+    min-height: 3px;
+    background-color: transparent;
+    border-radius: 0;
+}
+
+.load-progress progress {
+    min-height: 3px;
+    border-radius: 0 2px 2px 0;
+    background-color: @accent_bg_color;
+    box-shadow: 0 0 4px alpha(@accent_bg_color, 0.35);
+    transition: width 300ms ease-out;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  6. VERTICAL TAB SIDEBAR
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Sidebar container */
+.sidebar-container {
+    background-color: alpha(currentColor, 0.02);
+}
+
+/* ── Sidebar titlebar: traffic lights + tab filter ───────────── */
+.sidebar-titlebar {
+    padding: 8px 10px 4px 10px;
+    min-height: 32px;
+}
+
+/* macOS-style traffic light dot buttons */
+.traffic-dot {
+    min-width: 14px;
+    min-height: 14px;
+    padding: 1px;
+    margin: 0;
+    border-radius: 50%;
+    border: none;
+    background: none;
+    box-shadow: none;
+}
+
+.traffic-dot:hover {
+    background: alpha(currentColor, 0.1);
+}
+
+.traffic-lights {
+    margin-right: 6px;
+}
+
+/* Tab filter search entry in the titlebar */
+.sidebar-tab-filter {
+    min-height: 26px;
+    font-size: 12px;
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid alpha(currentColor, 0.06);
+    padding: 0 6px;
+}
+
+.sidebar-tab-filter:focus-within {
+    background-color: alpha(currentColor, 0.03);
+    border-color: alpha(@accent_bg_color, 0.3);
+}
+
+/* Bookmark button inside the URL bar */
+.url-bookmark-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0;
+    border-radius: 6px;
+    margin-left: 2px;
+}
+
+.url-bookmark-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+/* Bookmarked state */
+.url-bookmark-btn.bookmarked image {
+    color: #f5c211;
+}
+
+/* ── Sidebar paned resize handle ─────────────────────────────── */
+.sidebar-paned > separator {
+    min-width: 2px;
+    background-color: alpha(currentColor, 0.08);
+    transition: background-color 200ms ease-in-out;
+}
+
+.sidebar-paned > separator:hover {
+    min-width: 4px;
+    background-color: alpha(@accent_bg_color, 0.25);
+}
+
+/* ── Sidebar navigation row ────────────────────────────────────── */
+.sidebar-nav-row {
+    padding: 6px 8px;
+    min-height: 36px;
+}
+
+.sidebar-nav-row .nav-buttons button {
+    min-height: 32px;
+    min-width: 32px;
+    border-radius: 6px;
+    padding: 0;
+    margin: 0 1px;
+}
+
+.sidebar-nav-row button.flat {
+    min-height: 32px;
+    min-width: 32px;
+    border-radius: 6px;
+    padding: 0;
+}
+
+/* Sidebar header area (workspace selector) */
+.sidebar-header {
+    padding: 8px 8px 4px 8px;
+}
+
+.sidebar-header label {
+    font-weight: bold;
+    font-size: 13px;
+}
+
+/* Workspace selector dropdown button */
+.workspace-btn {
+    border-radius: 8px;
+    padding: 4px 10px;
+    min-height: 32px;
+    font-weight: 600;
+}
+
+.workspace-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+.workspace-chevron {
+    -gtk-icon-size: 12px;
+    opacity: 0.5;
+}
+
+/* Tab list inside sidebar */
+.sidebar-tab-list {
+    background: none;
+    padding: 2px 6px;
+}
+
+.sidebar-tab-list row {
+    border-radius: 8px;
+    padding: 2px 4px;
+    margin: 1px 0;
+    min-height: 36px;
+}
+
+.sidebar-tab-list row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.sidebar-tab-list row:selected {
+    background-color: alpha(@accent_bg_color, 0.15);
+}
+
+/* Individual tab row in the sidebar */
+.sidebar-tab-row {
+    padding: 4px 8px;
+    min-height: 32px;
+}
+
+.sidebar-tab-favicon {
+    -gtk-icon-size: 16px;
+    margin-right: 8px;
+    min-width: 16px;
+    min-height: 16px;
+}
+
+.sidebar-tab-title {
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.sidebar-tab-title-active {
+    font-weight: 600;
+}
+
+.sidebar-tab-close {
+    border-radius: 50%;
+    min-height: 20px;
+    min-width: 20px;
+    padding: 0;
+    margin: 0;
+    opacity: 0;
+    transition: opacity 150ms ease-in-out;
+}
+
+/* Show close button on row hover */
+.sidebar-tab-list row:hover .sidebar-tab-close {
+    opacity: 0.6;
+}
+
+.sidebar-tab-close:hover {
+    opacity: 1;
+    background-color: alpha(currentColor, 0.1);
+}
+
+/* Loading spinner in sidebar tab */
+.sidebar-tab-spinner {
+    min-width: 16px;
+    min-height: 16px;
+}
+
+/* Sidebar footer (new tab button area) */
+.sidebar-footer {
+    padding: 4px 8px 8px 8px;
+}
+
+.sidebar-new-tab-btn {
+    border-radius: 8px;
+    min-height: 34px;
+}
+
+.sidebar-new-tab-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  7. COMMAND PALETTE
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Full-window translucent backdrop */
+.command-palette-container {
+    background-color: alpha(black, 0.35);
+}
+
+/* The command palette card */
+.command-palette {
+    background-color: @window_bg_color;
+    border-radius: 12px;
+    border: 1px solid alpha(currentColor, 0.12);
+    box-shadow: 0 12px 40px alpha(black, 0.25),
+                0 4px 12px alpha(black, 0.15);
+}
+
+.command-palette-box {
+    border-radius: 12px;
+}
+
+.command-palette-search {
+    border-radius: 8px;
+    min-height: 36px;
+    font-size: 14px;
+    border: none;
+    background-color: alpha(currentColor, 0.04);
+}
+
+.command-palette-search:focus {
+    background-color: alpha(currentColor, 0.06);
+    box-shadow: none;
+    outline: none;
+}
+
+.command-palette-list {
+    background: none;
+}
+
+.command-palette-list row {
+    border-radius: 8px;
+    padding: 2px 6px;
+    margin: 1px 0;
+    min-height: 40px;
+}
+
+.command-palette-list row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.command-palette-list row:selected {
+    background-color: alpha(@accent_bg_color, 0.15);
+}
+
+.command-palette-shortcut {
+    font-family: monospace;
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background-color: alpha(currentColor, 0.06);
+}
+
+/* Command palette icon */
+.command-palette-icon {
+    opacity: 0.6;
+    margin-right: 4px;
+    -gtk-icon-size: 18px;
+}
+
+.command-palette-list row:selected .command-palette-icon {
+    opacity: 0.9;
+}
+
+/* Category header rows (non-selectable) */
+.command-palette-category-header {
+    background: none;
+    padding: 0;
+    min-height: 24px;
+    margin: 2px 0 0 0;
+}
+
+.command-palette-category-header label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    opacity: 0.5;
+}
+
+/* Result count label */
+.command-palette-count {
+    font-size: 11px;
+    margin-bottom: 2px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  8. SPLIT VIEW
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Wide handle styling for the split-view paned */
+paned > separator {
+    min-width: 6px;
+    min-height: 6px;
+    background-color: alpha(currentColor, 0.06);
+    transition: background-color 200ms ease-in-out;
+}
+
+paned > separator:hover {
+    background-color: alpha(@accent_bg_color, 0.2);
+}
+
+/* Split view info label */
+.split-view-label {
+    font-size: 13px;
+    opacity: 0.6;
+    font-style: italic;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  9. HEADER BUTTONS (flat)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+headerbar button.flat {
+    border-radius: 8px;
+    min-height: 34px;
+    min-width: 34px;
+}
+
+headerbar button.flat:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+headerbar button.flat:active {
+    background-color: alpha(currentColor, 0.14);
+    transition: all 80ms ease-out;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  10. WINDOW / GENERAL
+ * ═══════════════════════════════════════════════════════════════════ */
+
+window.csd {
+    border-radius: 12px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  11. SEPARATOR / DIVIDER STYLING
+ * ═══════════════════════════════════════════════════════════════════ */
+
+separator {
+    min-height: 1px;
+    background-color: alpha(currentColor, 0.08);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  12. TOOLTIP STYLING
+ * ═══════════════════════════════════════════════════════════════════ */
+
+tooltip {
+    border-radius: 6px;
+}
+
+tooltip.background {
+    border-radius: 6px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  13. BOOKMARK BUTTON (now inside URL bar — see .url-bookmark-btn)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  14. MENU POPOVER
+ * ═══════════════════════════════════════════════════════════════════ */
+
+popover.menu {
+    border-radius: 10px;
+    padding: 4px;
+}
+
+popover.menu modelbutton {
+    border-radius: 6px;
+    padding: 6px 12px;
+    min-height: 28px;
+}
+
+popover.menu modelbutton:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  15. DIALOG & LIST STYLING
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.boxed-list {
+    border-radius: 10px;
+}
+
+.boxed-list row {
+    min-height: 44px;
+}
+
+.boxed-list row:first-child {
+    border-radius: 10px 10px 0 0;
+}
+
+.boxed-list row:last-child {
+    border-radius: 0 0 10px 10px;
+}
+
+.boxed-list row:only-child {
+    border-radius: 10px;
+}
+
+searchentry {
+    border-radius: 8px;
+}
+
+button.destructive-action {
+    border-radius: 8px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  16. PREFERENCES WINDOW
+ * ═══════════════════════════════════════════════════════════════════ */
+
+preferencesgroup list {
+    border-radius: 10px;
+}
+
+preferencesgroup list row {
+    min-height: 44px;
+}
+
+preferencesgroup list row:first-child {
+    border-radius: 10px 10px 0 0;
+}
+
+preferencesgroup list row:last-child {
+    border-radius: 0 0 10px 10px;
+}
+
+preferencesgroup list row:only-child {
+    border-radius: 10px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  17. WORKSPACE BADGE / COLOUR DOT
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.workspace-color-dot {
+    min-width: 10px;
+    min-height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+/* Workspace list in popover */
+.workspace-list row {
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-height: 32px;
+}
+
+.workspace-list row:hover {
+    background-color: alpha(currentColor, 0.06);
+}
+
+.workspace-list row:selected {
+    background-color: alpha(@accent_bg_color, 0.15);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  18. PRIVACY INDICATOR
+ * ═══════════════════════════════════════════════════════════════════ */
+
+.privacy-indicator {
+    color: #2ec27e;
+    -gtk-icon-size: 14px;
+    opacity: 0.7;
+    margin-left: 4px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+ *  19. TOAST OVERLAY
+ * ═══════════════════════════════════════════════════════════════════ */
+
+toast {
+    border-radius: 8px;
+}
