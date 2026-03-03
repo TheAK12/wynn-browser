@@ -28,6 +28,7 @@ use libadwaita::prelude::*;
 use crate::adblocker;
 use crate::database;
 use crate::history;
+use crate::keepassxc;
 
 // ── Settings helpers ────────────────────────────────────────────────
 
@@ -201,7 +202,7 @@ pub fn show_settings(window: &adw::ApplicationWindow, ucm: &webkit6::UserContent
 
     let ua_row = adw::SwitchRow::builder()
         .title("Custom User Agent")
-        .subtitle("Use a privacy-respecting Firefox user agent string")
+        .subtitle("Use a privacy-respecting Safari-compatible user agent string")
         .active(ua_enabled)
         .build();
 
@@ -305,6 +306,111 @@ pub fn show_settings(window: &adw::ApplicationWindow, ucm: &webkit6::UserContent
 
     data_group.add(&clear_history_row);
     privacy_page.add(&data_group);
+
+    // ── Password Backend group ──────────────────────────────────────
+    let password_group = adw::PreferencesGroup::builder()
+        .title("Password Manager")
+        .description("Choose how passwords are stored and autofilled")
+        .build();
+
+    let pw_backend_model = gtk4::StringList::new(&["Built-in (Wynn)", "KeePassXC"]);
+
+    let pw_backend_row = adw::ComboRow::builder()
+        .title("Password Backend")
+        .subtitle("Select which password manager to use")
+        .model(&pw_backend_model)
+        .build();
+
+    let current_backend = keepassxc::backend_name();
+    pw_backend_row.set_selected(if current_backend == "keepassxc" { 1 } else { 0 });
+
+    // Status row — shows KeePassXC connection state.
+    let kpxc_status_row = adw::ActionRow::builder()
+        .title("KeePassXC Status")
+        .subtitle(if keepassxc::is_active_backend() {
+            if keepassxc::is_connected() {
+                "Connected"
+            } else if keepassxc::is_available() {
+                "Available — will connect on first use"
+            } else {
+                "Not running — start KeePassXC and enable browser integration"
+            }
+        } else {
+            "Not active — select KeePassXC above to enable"
+        })
+        .build();
+
+    let status_icon_name = if keepassxc::is_active_backend() && keepassxc::is_connected() {
+        "emblem-ok-symbolic"
+    } else if keepassxc::is_active_backend() && keepassxc::is_available() {
+        "emblem-synchronizing-symbolic"
+    } else {
+        "dialog-information-symbolic"
+    };
+    let status_icon = gtk4::Image::from_icon_name(status_icon_name);
+    kpxc_status_row.add_suffix(&status_icon);
+
+    // Connect button — only useful when KeePassXC backend is active.
+    let connect_row = adw::ActionRow::builder()
+        .title("Connect to KeePassXC")
+        .subtitle("Establish connection and pair with database")
+        .activatable(true)
+        .build();
+
+    let connect_icon = gtk4::Image::from_icon_name("network-wired-symbolic");
+    connect_row.add_suffix(&connect_icon);
+
+    let kpxc_status_row_ref = kpxc_status_row.clone();
+    let status_icon_ref = status_icon.clone();
+    connect_row.connect_activated(move |row| {
+        if !keepassxc::is_active_backend() {
+            row.set_subtitle("Select KeePassXC as the backend first");
+            return;
+        }
+        match keepassxc::connect() {
+            Ok(()) => {
+                row.set_subtitle("Connected successfully!");
+                kpxc_status_row_ref.set_subtitle("Connected");
+                status_icon_ref.set_icon_name(Some("emblem-ok-symbolic"));
+            }
+            Err(e) => {
+                row.set_subtitle(&format!("Failed: {}", e));
+                kpxc_status_row_ref.set_subtitle("Connection failed");
+                status_icon_ref.set_icon_name(Some("dialog-error-symbolic"));
+            }
+        }
+    });
+
+    let kpxc_status_row_ref2 = kpxc_status_row.clone();
+    let status_icon_ref2 = status_icon.clone();
+    pw_backend_row.connect_selected_notify(move |row| {
+        let backend = match row.selected() {
+            1 => "keepassxc",
+            _ => "builtin",
+        };
+        keepassxc::set_backend(backend);
+        // Update status display.
+        if backend == "keepassxc" {
+            if keepassxc::is_available() {
+                kpxc_status_row_ref2.set_subtitle(
+                    "Available — use Connect button or will auto-connect on first use",
+                );
+                status_icon_ref2.set_icon_name(Some("emblem-synchronizing-symbolic"));
+            } else {
+                kpxc_status_row_ref2
+                    .set_subtitle("Not running — start KeePassXC and enable browser integration");
+                status_icon_ref2.set_icon_name(Some("dialog-warning-symbolic"));
+            }
+        } else {
+            kpxc_status_row_ref2.set_subtitle("Not active — select KeePassXC above to enable");
+            status_icon_ref2.set_icon_name(Some("dialog-information-symbolic"));
+        }
+    });
+
+    password_group.add(&pw_backend_row);
+    password_group.add(&kpxc_status_row);
+    password_group.add(&connect_row);
+    privacy_page.add(&password_group);
 
     #[allow(deprecated)]
     prefs.add(&privacy_page);

@@ -45,6 +45,7 @@ use rand::RngCore;
 use std::cell::RefCell;
 
 use crate::database;
+use crate::keepassxc;
 
 // ── Session key cache ────────────────────────────────────────────────
 //
@@ -301,6 +302,32 @@ fn reset_password_store() {
 ///
 /// If already unlocked this session, calls `on_unlocked` immediately.
 pub fn ensure_unlocked<F: Fn() + 'static>(widget: &impl IsA<gtk4::Widget>, on_unlocked: F) {
+    // KeePassXC backend: no master password needed — just ensure connected.
+    if keepassxc::is_active_backend() {
+        if !keepassxc::is_connected() {
+            if let Err(e) = keepassxc::connect() {
+                eprintln!("[passwords] KeePassXC connect failed: {e}");
+                // Show an error toast or dialog.
+                let dialog = adw::AlertDialog::builder()
+                    .heading("KeePassXC Connection Failed")
+                    .body(&format!(
+                        "Could not connect to KeePassXC:\n{}\n\n\
+                         Make sure KeePassXC is running with browser integration enabled.",
+                        e
+                    ))
+                    .close_response("ok")
+                    .default_response("ok")
+                    .build();
+                dialog.add_response("ok", "OK");
+                dialog.present(Some(widget));
+                return;
+            }
+        }
+        on_unlocked();
+        return;
+    }
+
+    // Built-in backend: master password flow.
     if is_unlocked() {
         on_unlocked();
         return;
@@ -538,6 +565,15 @@ pub fn extract_origin(url: &str) -> String {
 ///
 /// Requires the store to be unlocked (panics otherwise).
 pub fn save_credential(origin: &str, username: &str, password: &str) {
+    // KeePassXC backend: delegate to KeePassXC.
+    if keepassxc::is_active_backend() {
+        if let Err(e) = keepassxc::save_login(origin, username, password) {
+            eprintln!("[passwords] KeePassXC save_login failed: {e}");
+        }
+        return;
+    }
+
+    // Built-in backend.
     if !is_unlocked() {
         return;
     }
@@ -560,6 +596,30 @@ pub fn save_credential(origin: &str, username: &str, password: &str) {
 ///
 /// Returns empty vec if the store is locked.
 pub fn lookup_credentials(origin: &str) -> Vec<SavedCredential> {
+    // KeePassXC backend: convert KpxcEntry → SavedCredential.
+    if keepassxc::is_active_backend() {
+        return match keepassxc::get_logins(origin) {
+            Ok(entries) => entries
+                .into_iter()
+                .enumerate()
+                .map(|(i, e)| SavedCredential {
+                    id: i as i64,
+                    origin: origin.to_string(),
+                    username: e.login,
+                    password: e.password,
+                    created: String::new(),
+                    last_used: String::new(),
+                    use_count: 0,
+                })
+                .collect(),
+            Err(e) => {
+                eprintln!("[passwords] KeePassXC get_logins failed: {e}");
+                Vec::new()
+            }
+        };
+    }
+
+    // Built-in backend.
     if !is_unlocked() {
         return Vec::new();
     }
@@ -596,6 +656,12 @@ pub fn lookup_credentials(origin: &str) -> Vec<SavedCredential> {
 /// locked — it only checks the row count, no decryption needed.
 /// Excludes "never save" markers.
 pub fn has_credentials_for(origin: &str) -> bool {
+    // KeePassXC backend.
+    if keepassxc::is_active_backend() {
+        return keepassxc::has_logins_for(origin);
+    }
+
+    // Built-in backend.
     database::with_db(|conn| {
         let count: i64 = conn
             .query_row(
@@ -686,6 +752,21 @@ pub fn record_use(id: i64) {
 /// Returns `None` if the store is locked or no credentials exist for
 /// this origin.
 pub fn autofill_js(origin: &str) -> Option<String> {
+    // KeePassXC backend: fetch logins and generate JS for the first entry.
+    if keepassxc::is_active_backend() {
+        return match keepassxc::get_logins(origin) {
+            Ok(entries) if !entries.is_empty() => {
+                Some(keepassxc::autofill_js_for_entry(&entries[0]))
+            }
+            Ok(_) => None, // No logins found.
+            Err(e) => {
+                eprintln!("[passwords] KeePassXC autofill get_logins failed: {e}");
+                None
+            }
+        };
+    }
+
+    // Built-in backend.
     let creds = lookup_credentials(origin);
     if creds.is_empty() {
         return None;
@@ -846,6 +927,53 @@ pub fn show_save_password_prompt(
     username: &str,
     password: &str,
 ) {
+    // KeePassXC backend: save directly without master password prompt.
+    if keepassxc::is_active_backend() {
+        let origin_owned = origin.to_string();
+        let username_owned = username.to_string();
+        let password_owned = password.to_string();
+        let widget = window.upcast_ref::<gtk4::Widget>().clone();
+
+        // Show a "Save to KeePassXC?" prompt (no master password needed).
+        let dialog = adw::AlertDialog::builder()
+            .heading("Save to KeePassXC?")
+            .body(&format!(
+                "Save credentials for {}?\n\nUsername: {}",
+                &origin_owned,
+                if username_owned.is_empty() {
+                    "(none)"
+                } else {
+                    &username_owned
+                },
+            ))
+            .close_response("not-now")
+            .default_response("save")
+            .build();
+
+        dialog.add_response("not-now", "Not Now");
+        dialog.add_response("save", "Save");
+        dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
+
+        let icon = gtk4::Image::from_icon_name("dialog-password-symbolic");
+        icon.set_pixel_size(48);
+        icon.set_margin_bottom(8);
+        dialog.set_extra_child(Some(&icon));
+
+        dialog.connect_response(None, move |_dlg, response| {
+            if response == "save" {
+                if let Err(e) =
+                    keepassxc::save_login(&origin_owned, &username_owned, &password_owned)
+                {
+                    eprintln!("[passwords] KeePassXC save failed: {e}");
+                }
+            }
+        });
+
+        dialog.present(Some(&widget));
+        return;
+    }
+
+    // Built-in backend: unlock first, then prompt.
     let origin_owned = origin.to_string();
     let username_owned = username.to_string();
     let password_owned = password.to_string();
@@ -952,6 +1080,38 @@ pub fn is_never_save(origin: &str) -> bool {
 ///
 /// Prompts for master password if locked.
 pub fn show_passwords_dialog(window: &impl IsA<gtk4::Widget>) {
+    // KeePassXC backend: show info dialog directing to KeePassXC app.
+    if keepassxc::is_active_backend() {
+        let status = if keepassxc::is_connected() {
+            "Connected"
+        } else {
+            "Not connected"
+        };
+
+        let dialog = adw::AlertDialog::builder()
+            .heading("Passwords Managed by KeePassXC")
+            .body(&format!(
+                "Your passwords are stored in KeePassXC.\n\n\
+                 Status: {}\n\n\
+                 To view, edit, or delete passwords, open the KeePassXC application.",
+                status
+            ))
+            .close_response("ok")
+            .default_response("ok")
+            .build();
+
+        dialog.add_response("ok", "OK");
+
+        let icon = gtk4::Image::from_icon_name("dialog-password-symbolic");
+        icon.set_pixel_size(48);
+        icon.set_margin_bottom(8);
+        dialog.set_extra_child(Some(&icon));
+
+        dialog.present(Some(window));
+        return;
+    }
+
+    // Built-in backend: unlock and show management dialog.
     let widget = window.upcast_ref::<gtk4::Widget>().clone();
     let widget_for_closure = widget.clone();
 

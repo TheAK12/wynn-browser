@@ -25,6 +25,7 @@ mod command_palette; // VS Code-style command palette overlay.
 mod database; // SQLite connection and schema management.
 mod downloads; // Download manager and progress tracking.
 mod history; // Browsing history recording and UI dialog.
+mod keepassxc; // KeePassXC browser protocol integration.
 mod passwords; // Password manager: save, autofill, management UI.
 mod settings; // Preferences window and settings persistence.
 mod webview; // WebView factory and URI normalisation helpers.
