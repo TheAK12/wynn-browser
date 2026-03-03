@@ -934,11 +934,36 @@ pub fn show_save_password_prompt(
         let password_owned = password.to_string();
         let widget = window.upcast_ref::<gtk4::Widget>().clone();
 
-        // Show a "Save to KeePassXC?" prompt (no master password needed).
+        // Check KeePassXC for existing entries with the same credentials.
+        // If already saved with the same username+password, skip silently.
+        if let Ok(existing) = keepassxc::get_logins(origin) {
+            for entry in &existing {
+                if entry.login == username && entry.password == password {
+                    // Already saved — nothing to do.
+                    return;
+                }
+            }
+        }
+
+        // Determine if this is an update (same username, different password).
+        let is_update = if let Ok(existing) = keepassxc::get_logins(origin) {
+            existing.iter().any(|e| e.login == username)
+        } else {
+            false
+        };
+
+        let heading = if is_update {
+            "Update password in KeePassXC?"
+        } else {
+            "Save to KeePassXC?"
+        };
+
+        // Show save/update prompt.
         let dialog = adw::AlertDialog::builder()
-            .heading("Save to KeePassXC?")
+            .heading(heading)
             .body(&format!(
-                "Save credentials for {}?\n\nUsername: {}",
+                "{} credentials for {}?\n\nUsername: {}",
+                if is_update { "Update" } else { "Save" },
                 &origin_owned,
                 if username_owned.is_empty() {
                     "(none)"
@@ -951,7 +976,7 @@ pub fn show_save_password_prompt(
             .build();
 
         dialog.add_response("not-now", "Not Now");
-        dialog.add_response("save", "Save");
+        dialog.add_response("save", if is_update { "Update" } else { "Save" });
         dialog.set_response_appearance("save", adw::ResponseAppearance::Suggested);
 
         let icon = gtk4::Image::from_icon_name("dialog-password-symbolic");

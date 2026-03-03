@@ -85,8 +85,20 @@ const PASSWORD_CAPTURE_JS: &str = r#"(function() {
     }
 
     // ── Utility: send credentials to Rust backend ────────────────
+    // Deduplication: only send once per unique (user, pw) combo
+    // within a short window.  Multiple events (submit, click, keydown)
+    // often fire for the same form action.
+    var _lastSent = '';
+    var _lastSentTime = 0;
+
     function sendCreds(user, pw) {
         if (!pw) return;
+        var key = (user || '') + '\x00' + pw;
+        var now = Date.now();
+        // Suppress duplicate within 3 seconds.
+        if (key === _lastSent && (now - _lastSentTime) < 3000) return;
+        _lastSent = key;
+        _lastSentTime = now;
         try {
             window.webkit.messageHandlers.wynnPasswordCapture.postMessage(
                 JSON.stringify({ username: user || '', password: pw })
@@ -223,6 +235,15 @@ pub fn register_password_capture_handler(
 
     let win = window.clone();
 
+    // Rust-side deduplication: track the last prompted credential to
+    // suppress duplicate messages that slip through the JS guard
+    // (e.g. across frame boundaries).
+    use std::cell::RefCell;
+    use std::time::Instant;
+    thread_local! {
+        static LAST_PW_PROMPT: RefCell<(String, Instant)> = RefCell::new((String::new(), Instant::now()));
+    }
+
     ucm.connect_script_message_received(Some("wynnPasswordCapture"), move |_ucm, js_value| {
         // The JS sends a JSON string: {"username": "...", "password": "..."}
         let json_str = js_value.to_str().to_string();
@@ -244,6 +265,19 @@ pub fn register_password_capture_handler(
         if passwords::is_never_save(&origin) {
             return;
         }
+
+        // Deduplicate: suppress identical prompts within 5 seconds.
+        let dedup_key = format!("{}\x00{}\x00{}", origin, username, password);
+        let dominated = LAST_PW_PROMPT.with(|cell| {
+            let (ref last_key, ref last_time) = *cell.borrow();
+            *last_key == dedup_key && last_time.elapsed().as_secs() < 5
+        });
+        if dominated {
+            return;
+        }
+        LAST_PW_PROMPT.with(|cell| {
+            *cell.borrow_mut() = (dedup_key, Instant::now());
+        });
 
         passwords::show_save_password_prompt(&win, &origin, &username, &password);
     });
