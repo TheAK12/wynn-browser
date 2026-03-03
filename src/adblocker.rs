@@ -39,6 +39,7 @@ use webkit6::{
 };
 
 use crate::database;
+use crate::webview;
 
 // ── Blocklist URL ───────────────────────────────────────────────────
 
@@ -541,8 +542,8 @@ pub fn load_rules(ucm: &UserContentManager) {
         AD_HIDING_CSS,
         UserContentInjectedFrames::AllFrames,
         UserStyleLevel::User,
-        &[], // allow list – empty means all sites
-        &[], // block list
+        &[],                    // allow list – empty means all sites
+        webview::CF_BLOCK_LIST, // block list – skip Cloudflare challenge frames
     );
     ucm.add_style_sheet(&style);
 
@@ -553,7 +554,7 @@ pub fn load_rules(ucm: &UserContentManager) {
         UserContentInjectedFrames::AllFrames,
         UserScriptInjectionTime::Start,
         &[],
-        &[],
+        webview::CF_BLOCK_LIST, // block list – skip Cloudflare challenge frames
     );
     ucm.add_script(&script);
 
@@ -723,12 +724,38 @@ fn generate_content_blocker_json() -> String {
         return "[]".to_string();
     }
 
+    // Cloudflare domains that must never be blocked — Turnstile
+    // challenges load resources from these and blocking them causes
+    // the human verification to get stuck.
+    let cf_whitelist: HashSet<&str> = [
+        "challenges.cloudflare.com",
+        "cloudflare.com",
+        "cloudflareinsights.com",
+        "static.cloudflareinsights.com",
+        "cdnjs.cloudflare.com",
+        "cloudflare-dns.com",
+    ]
+    .into_iter()
+    .collect();
+
     // WebKit has a limit on the number of rules (~75,000 in practice).
     // We batch domains into groups to create broader regex patterns.
     // Each rule uses a url-filter that matches the domain in the URL.
     let mut rules = Vec::new();
 
     for domain in &domains {
+        // Skip Cloudflare domains.
+        if cf_whitelist.contains(domain.as_str()) {
+            continue;
+        }
+        // Also skip if the domain is a subdomain of a whitelisted domain.
+        let is_cf_sub = cf_whitelist
+            .iter()
+            .any(|cf| domain.ends_with(&format!(".{cf}")));
+        if is_cf_sub {
+            continue;
+        }
+
         // Escape dots for regex.
         let escaped = domain.replace('.', "\\\\.");
 

@@ -35,10 +35,11 @@ use crate::settings as app_settings;
 // ── Privacy constants ───────────────────────────────────────────────
 
 /// A privacy-respecting user agent string.
-/// Mimics a recent Firefox on Linux to blend in, without revealing
-/// the actual WebKit engine version.
+/// Uses a Safari-compatible UA that matches the underlying WebKit
+/// engine.  A Firefox UA on WebKit triggers bot detection (Cloudflare
+/// Turnstile etc.) because the JS engine fingerprint doesn't match.
 const PRIVACY_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 
 /// JavaScript to send a Do Not Track signal via navigator property.
 const DNT_JS: &str = r#"
@@ -77,6 +78,16 @@ const WEBRTC_LEAK_PREVENTION_JS: &str = r#"
     }
 })();
 "#;
+
+/// Cloudflare challenge domains — scripts must NOT be injected into
+/// these frames, or Cloudflare's bot detection will flag the browser.
+pub const CF_BLOCK_LIST: &[&str] = &[
+    "https://*.challenges.cloudflare.com/*",
+    "https://challenges.cloudflare.com/*",
+    "https://*.cloudflare.com/cdn-cgi/*",
+    "https://*.cloudflareinsights.com/*",
+    "https://static.cloudflareinsights.com/*",
+];
 
 // ── Public API ──────────────────────────────────────────────────────
 
@@ -156,15 +167,22 @@ pub fn setup_privacy_on_session(session: &NetworkSession) {
 
     session.set_itp_enabled(itp_enabled);
 
-    // Set strict cookie policy: reject third-party cookies.
-    let cookie_policy = app_settings::get_setting("privacy_cookies")
-        .unwrap_or_else(|| "no-third-party".to_string());
+    // Set cookie policy.
+    //
+    // Default changed from "no-third-party" → "allow-all" because the
+    // blanket third-party cookie block breaks Cloudflare Turnstile
+    // challenges (they need __cf_bm / cf_clearance cookies).  ITP
+    // (enabled above) already provides intelligent tracking protection
+    // that handles cross-site tracking without breaking legitimate
+    // third-party cookie use cases like security challenges.
+    let cookie_policy =
+        app_settings::get_setting("privacy_cookies").unwrap_or_else(|| "allow-all".to_string());
 
     if let Some(cookie_mgr) = session.cookie_manager() {
         let policy = match cookie_policy.as_str() {
             "block-all" => CookieAcceptPolicy::Never,
-            "allow-all" => CookieAcceptPolicy::Always,
-            _ => CookieAcceptPolicy::NoThirdParty, // default
+            "no-third-party" => CookieAcceptPolicy::NoThirdParty,
+            _ => CookieAcceptPolicy::Always, // default: allow-all (ITP handles tracking)
         };
         cookie_mgr.set_accept_policy(policy);
     }
@@ -183,8 +201,8 @@ pub fn inject_privacy_scripts(ucm: &UserContentManager) {
             DNT_JS,
             UserContentInjectedFrames::AllFrames,
             UserScriptInjectionTime::Start,
-            &[],
-            &[],
+            &[],           // allow-list: all pages
+            CF_BLOCK_LIST, // block-list: skip Cloudflare challenge frames
         );
         ucm.add_script(&dnt_script);
     }
@@ -199,8 +217,8 @@ pub fn inject_privacy_scripts(ucm: &UserContentManager) {
             WEBRTC_LEAK_PREVENTION_JS,
             UserContentInjectedFrames::AllFrames,
             UserScriptInjectionTime::Start,
-            &[],
-            &[],
+            &[],           // allow-list: all pages
+            CF_BLOCK_LIST, // block-list: skip Cloudflare challenge frames
         );
         ucm.add_script(&rtc_script);
     }

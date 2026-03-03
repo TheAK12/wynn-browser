@@ -211,12 +211,13 @@ pub fn register_password_capture_handler(
     // Inject the password capture JS as a UserScript so it runs on
     // every page load automatically (like the DNT / privacy scripts).
     // UserScripts bypass CSP and run in every frame.
+    // Exclude Cloudflare challenge frames to avoid triggering bot detection.
     let capture_script = webkit6::UserScript::new(
         PASSWORD_CAPTURE_JS,
         webkit6::UserContentInjectedFrames::AllFrames,
         webkit6::UserScriptInjectionTime::End,
-        &[], // allow-list: empty = all pages
-        &[], // block-list: empty = no exclusions
+        &[],                    // allow-list: empty = all pages
+        webview::CF_BLOCK_LIST, // block-list: skip Cloudflare challenge frames
     );
     ucm.add_script(&capture_script);
 
@@ -594,10 +595,19 @@ pub fn add_tab(
             } else if let Some(wda) =
                 request.downcast_ref::<webkit6::WebsiteDataAccessPermissionRequest>()
             {
-                // Third-party data access — auto-deny for privacy.
-                let _requesting = wda.requesting_domain();
-                let _current = wda.current_domain();
-                request.deny();
+                // Third-party data access — allow for Cloudflare challenge
+                // domains (needed for Turnstile verification), deny others.
+                let requesting = wda
+                    .requesting_domain()
+                    .map(|d| d.to_string())
+                    .unwrap_or_default();
+                if requesting.ends_with("cloudflare.com")
+                    || requesting.ends_with("cloudflareinsights.com")
+                {
+                    request.allow();
+                } else {
+                    request.deny();
+                }
                 return true;
             } else if request
                 .downcast_ref::<webkit6::MediaKeySystemPermissionRequest>()
