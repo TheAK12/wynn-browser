@@ -11,8 +11,8 @@ A modern, privacy-focused web browser for Linux built with Rust, GTK4, libadwait
 
 ## Table of Contents
 
-- [Features](#features)
 - [Screenshots](#screenshots)
+- [Features](#features)
 - [System Requirements](#system-requirements)
 - [Installing Dependencies](#installing-dependencies)
 - [Building from Source](#building-from-source)
@@ -25,6 +25,15 @@ A modern, privacy-focused web browser for Linux built with Rust, GTK4, libadwait
 - [Project Structure](#project-structure)
 - [Contributing](#contributing)
 - [License](#license)
+
+---
+
+## Screenshots
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/59e793eb-73e7-4275-b33b-6c65489782e2" />
+<img width="1920" height="1075" alt="image" src="https://github.com/user-attachments/assets/c32399f8-7dfb-481c-9d6e-d6e7755600fb" />
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/f57811ee-58d7-45b1-aad3-3e34ff9e94ef" />
+<img width="1919" height="1079" alt="image" src="https://github.com/user-attachments/assets/fe7a88ec-fd4f-4afe-ba67-a5adefa88547" />
+
 
 ---
 
