@@ -235,9 +235,10 @@ pub fn register_password_capture_handler(
 
     let win = window.clone();
 
-    // Rust-side deduplication: track the last prompted credential to
+    // Rust-side deduplication: track recently prompted credentials to
     // suppress duplicate messages that slip through the JS guard
-    // (e.g. across frame boundaries).
+    // (e.g. across frame boundaries or page navigations like Google's
+    // multi-step login that revisits the same origin).
     use std::cell::RefCell;
     use std::time::Instant;
     thread_local! {
@@ -266,13 +267,15 @@ pub fn register_password_capture_handler(
             return;
         }
 
-        // Deduplicate: suppress identical prompts within 5 seconds.
+        // Deduplicate: suppress identical prompts within 60 seconds.
+        // This covers multi-step logins (Google), page reloads, and
+        // rapid re-login attempts with the same credentials.
         let dedup_key = format!("{}\x00{}\x00{}", origin, username, password);
-        let dominated = LAST_PW_PROMPT.with(|cell| {
+        let is_duplicate = LAST_PW_PROMPT.with(|cell| {
             let (ref last_key, ref last_time) = *cell.borrow();
-            *last_key == dedup_key && last_time.elapsed().as_secs() < 5
+            *last_key == dedup_key && last_time.elapsed().as_secs() < 60
         });
-        if dominated {
+        if is_duplicate {
             return;
         }
         LAST_PW_PROMPT.with(|cell| {
