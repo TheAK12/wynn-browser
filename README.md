@@ -156,7 +156,7 @@ sudo dnf install \
 ## Building from Source
 
 ```bash
-git clone https://github.com/YourUsername/wynn-browser.git
+git clone https://github.com/TheAK12/wynn-browser.git
 cd wynn-browser
 cargo build --release
 ```
