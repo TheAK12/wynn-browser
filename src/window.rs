@@ -807,6 +807,10 @@ pub fn build_window(app: &adw::Application) {
         .content(&root_overlay)
         .build();
 
+    // Register the JS-based password capture handler (replaces the old
+    // connect_submit_form approach that caused SIGSEGV on Google login).
+    browser_tab::register_password_capture_handler(&ucm, &window);
+
     // Wire the close button to actually close the window.
     window_close_btn.connect_clicked(clone!(
         #[weak]

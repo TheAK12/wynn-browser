@@ -275,6 +275,25 @@ fn setup_master_password(master_password: &str) {
     set_derived_key(key);
 }
 
+/// Reset the password store entirely.  Deletes ALL saved passwords
+/// and clears the master password so the user can set a new one.
+///
+/// This is the "forgot master password" escape hatch — the old
+/// encrypted data is irrecoverable without the old master password.
+fn reset_password_store() {
+    // Clear the in-memory key.
+    DERIVED_KEY.with(|k| *k.borrow_mut() = None);
+
+    // Remove master password settings.
+    crate::settings::set_setting("pw_salt", "");
+    crate::settings::set_setting("pw_verify", "");
+
+    // Delete all saved passwords from the database.
+    database::with_db(|conn| {
+        let _ = conn.execute("DELETE FROM passwords", []);
+    });
+}
+
 // ── Master password UI ──────────────────────────────────────────────
 
 /// Prompt the user for their master password (or to set one), then
@@ -306,8 +325,10 @@ fn show_unlock_dialog(widget: &impl IsA<gtk4::Widget>, on_unlocked: std::rc::Rc<
         .build();
 
     dialog.add_response("cancel", "Cancel");
+    dialog.add_response("forgot", "Forgot Password?");
     dialog.add_response("unlock", "Unlock");
     dialog.set_response_appearance("unlock", adw::ResponseAppearance::Suggested);
+    dialog.set_response_appearance("forgot", adw::ResponseAppearance::Destructive);
 
     let form_box = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
     form_box.set_margin_top(4);
@@ -327,24 +348,84 @@ fn show_unlock_dialog(widget: &impl IsA<gtk4::Widget>, on_unlocked: std::rc::Rc<
     let widget_clone = widget.upcast_ref::<gtk4::Widget>().clone();
 
     dialog.connect_response(None, move |_dlg, response| {
-        if response == "unlock" {
-            let master = pw_entry.text().to_string();
-            if master.is_empty() {
-                return;
+        match response {
+            "unlock" => {
+                let master = pw_entry.text().to_string();
+                if master.is_empty() {
+                    return;
+                }
+                if try_unlock(&master) {
+                    (on_unlocked)();
+                } else {
+                    // Wrong password — show error and re-prompt.
+                    error_label.set_label("Incorrect master password.");
+                    error_label.set_visible(true);
+                    // Re-show the dialog after a short delay.
+                    let w = widget_clone.clone();
+                    let cb = on_unlocked.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(300),
+                        move || {
+                            show_unlock_dialog(&w, cb);
+                        },
+                    );
+                }
             }
-            if try_unlock(&master) {
-                (on_unlocked)();
-            } else {
-                // Wrong password — show error and re-prompt.
-                error_label.set_label("Incorrect master password.");
-                error_label.set_visible(true);
-                // Re-show the dialog after a short delay.
+            "forgot" => {
+                // Show a destructive confirmation dialog before resetting.
                 let w = widget_clone.clone();
                 let cb = on_unlocked.clone();
-                glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
-                    show_unlock_dialog(&w, cb);
+                glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+                    show_reset_confirmation(&w, cb);
                 });
             }
+            _ => {} // Cancel — do nothing.
+        }
+    });
+
+    dialog.present(Some(widget));
+}
+
+/// Confirmation dialog before resetting the password store.
+fn show_reset_confirmation(widget: &gtk4::Widget, on_unlocked: std::rc::Rc<dyn Fn()>) {
+    let dialog = adw::AlertDialog::builder()
+        .heading("Reset Password Store?")
+        .body(
+            "This will permanently delete ALL saved passwords.\n\n\
+             This action cannot be undone. You will be able to \
+             set a new master password afterward.",
+        )
+        .close_response("go-back")
+        .default_response("go-back")
+        .build();
+
+    dialog.add_response("go-back", "Go Back");
+    dialog.add_response("reset", "Delete All & Reset");
+    dialog.set_response_appearance("reset", adw::ResponseAppearance::Destructive);
+
+    let icon = gtk4::Image::from_icon_name("dialog-warning-symbolic");
+    icon.set_pixel_size(48);
+    icon.set_margin_bottom(8);
+    dialog.set_extra_child(Some(&icon));
+
+    let widget_clone = widget.clone();
+
+    dialog.connect_response(None, move |_dlg, response| {
+        if response == "reset" {
+            // Nuke everything and let user set a new master password.
+            reset_password_store();
+            let w = widget_clone.clone();
+            let cb = on_unlocked.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
+                show_setup_dialog(&w, cb);
+            });
+        } else {
+            // Go back — re-show the unlock dialog.
+            let w = widget_clone.clone();
+            let cb = on_unlocked.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
+                show_unlock_dialog(&w, cb);
+            });
         }
     });
 
@@ -509,6 +590,24 @@ pub fn lookup_credentials(origin: &str) -> Vec<SavedCredential> {
     })
 }
 
+/// Check whether there are saved credentials for a given origin.
+///
+/// Unlike [`lookup_credentials`], this works even when the store is
+/// locked — it only checks the row count, no decryption needed.
+/// Excludes "never save" markers.
+pub fn has_credentials_for(origin: &str) -> bool {
+    database::with_db(|conn| {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM passwords WHERE origin = ?1 AND username != ?2",
+                rusqlite::params![origin, "\x00never\x00"],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        count > 0
+    })
+}
+
 /// Return all saved credentials (for the management UI).
 ///
 /// Returns empty vec if the store is locked.
@@ -600,41 +699,135 @@ pub fn autofill_js(origin: &str) -> Option<String> {
     Some(format!(
         r#"(function() {{
     'use strict';
-    function fill() {{
-        var pwFields = document.querySelectorAll('input[type="password"]');
-        if (pwFields.length === 0) return false;
-        pwFields.forEach(function(pw) {{
-            var form = pw.closest('form') || document.body;
-            var inputs = form.querySelectorAll(
-                'input[type="text"], input[type="email"], input[type="tel"], input:not([type])'
-            );
-            var userField = null;
-            for (var i = 0; i < inputs.length; i++) {{
-                if (inputs[i].compareDocumentPosition(pw) & 4) {{
-                    userField = inputs[i];
+    // Allow re-injection if the URL changed (SPA navigation).
+    if (window.__wynnAutofillActive === location.href) return;
+    window.__wynnAutofillActive = location.href;
+
+    var WYNN_USER = '{username}';
+    var WYNN_PASS = '{password}';
+
+    // ── Helper: set a value on an input using the native setter
+    //    so React / Angular / etc. pick it up. ────────────────────
+    var nativeSet = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype, 'value'
+    ).set;
+
+    function setValue(el, val) {{
+        if (!el || !val) return;
+        nativeSet.call(el, val);
+        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+    }}
+
+    // ── Helper: find visible input fields ────────────────────────
+    function visibleInputs(selector, scope) {{
+        var els = (scope || document).querySelectorAll(selector);
+        var result = [];
+        for (var i = 0; i < els.length; i++) {{
+            // offsetParent is null for hidden elements (display:none, etc.)
+            // but also for position:fixed elements, so check visibility too.
+            if (els[i].offsetParent !== null || els[i].offsetHeight > 0) {{
+                result.push(els[i]);
+            }}
+        }}
+        return result;
+    }}
+
+    // Track what we've already filled to avoid re-triggering.
+    var filledUser = false;
+    var filledPass = false;
+
+    // ── Main fill logic ──────────────────────────────────────────
+    function tryFill() {{
+        var pwFields = visibleInputs('input[type="password"]');
+        var userSel = 'input[type="email"], input[type="text"], input[type="tel"], input:not([type])';
+        var userFields = visibleInputs(userSel);
+
+        // Filter out hidden / aria-hidden fields and fields that are
+        // inside elements with display:none.
+        userFields = userFields.filter(function(el) {{
+            return el.getAttribute('aria-hidden') !== 'true';
+        }});
+
+        if (pwFields.length > 0 && !filledPass) {{
+            // Password step — fill the password field.
+            for (var i = 0; i < pwFields.length; i++) {{
+                setValue(pwFields[i], WYNN_PASS);
+            }}
+            filledPass = true;
+
+            // Also fill any visible username field on this page.
+            if (!filledUser && WYNN_USER) {{
+                for (var j = 0; j < userFields.length; j++) {{
+                    // Only fill if the field is before the password field
+                    // or if it looks like a username/email field.
+                    if (!userFields[j].value) {{
+                        setValue(userFields[j], WYNN_USER);
+                        filledUser = true;
+                        break;
+                    }}
                 }}
             }}
-            if (userField) {{
-                var nativeSet = Object.getOwnPropertyDescriptor(
-                    HTMLInputElement.prototype, 'value'
-                ).set;
-                nativeSet.call(userField, '{username}');
-                userField.dispatchEvent(new Event('input', {{bubbles: true}}));
-                userField.dispatchEvent(new Event('change', {{bubbles: true}}));
+        }} else if (pwFields.length === 0 && !filledUser && WYNN_USER) {{
+            // No password field yet (Google step 1) — fill username.
+            for (var k = 0; k < userFields.length; k++) {{
+                var el = userFields[k];
+                var name = (el.name || '').toLowerCase();
+                var id = (el.id || '').toLowerCase();
+                var auto = (el.autocomplete || '').toLowerCase();
+                // Match fields that look like email/username.
+                if (name.indexOf('mail') >= 0 || name.indexOf('user') >= 0 ||
+                    name.indexOf('login') >= 0 || name.indexOf('identifier') >= 0 ||
+                    id.indexOf('mail') >= 0 || id.indexOf('user') >= 0 ||
+                    id.indexOf('identifier') >= 0 ||
+                    auto === 'username' || auto === 'email' ||
+                    el.type === 'email') {{
+                    setValue(el, WYNN_USER);
+                    filledUser = true;
+                    break;
+                }}
             }}
-            var nativeSet = Object.getOwnPropertyDescriptor(
-                HTMLInputElement.prototype, 'value'
-            ).set;
-            nativeSet.call(pw, '{password}');
-            pw.dispatchEvent(new Event('input', {{bubbles: true}}));
-            pw.dispatchEvent(new Event('change', {{bubbles: true}}));
-        }});
-        return true;
+            // Fallback: fill the first visible text-like input.
+            if (!filledUser && userFields.length > 0) {{
+                setValue(userFields[0], WYNN_USER);
+                filledUser = true;
+            }}
+        }}
+
+        return filledUser || filledPass;
     }}
-    if (!fill()) {{
-        setTimeout(fill, 800);
-        setTimeout(fill, 2000);
-    }}
+
+    // ── Run immediately, then set up a MutationObserver ──────────
+    tryFill();
+
+    // Watch for DOM changes (new inputs being added, e.g. Google's
+    // multi-step login where password field appears later).
+    var observer = new MutationObserver(function() {{
+        tryFill();
+        if (filledUser && filledPass) {{
+            observer.disconnect();
+        }}
+    }});
+    observer.observe(document.documentElement, {{
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['type', 'style', 'class']
+    }});
+
+    // Also retry on a schedule for forms that load late.
+    var retries = [300, 600, 1000, 1500, 2500, 4000, 6000, 10000];
+    retries.forEach(function(delay) {{
+        setTimeout(function() {{
+            tryFill();
+            if (filledUser && filledPass) {{
+                observer.disconnect();
+            }}
+        }}, delay);
+    }});
+
+    // Clean up observer after 30 seconds regardless.
+    setTimeout(function() {{ observer.disconnect(); }}, 30000);
 }})();"#,
         username = username_escaped,
         password = password_escaped,

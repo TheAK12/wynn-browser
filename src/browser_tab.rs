@@ -28,6 +28,292 @@ use crate::history;
 use crate::passwords;
 use crate::webview;
 
+// ── Password capture via JavaScript ─────────────────────────────────
+//
+// Instead of using WebKit's connect_submit_form signal (which calls the
+// C function webkit_form_submission_request_list_text_fields and
+// segfaults on JS-driven forms like Google login), we inject JavaScript
+// that intercepts form submissions containing password fields.
+//
+// The JS extracts the username and password from the DOM and sends them
+// back to Rust via WebKit's message handler system
+// (window.webkit.messageHandlers.wynnPasswordCapture.postMessage).
+//
+// The message handler is registered once on the shared UserContentManager
+// via register_password_capture_handler() called from window.rs.
+
+/// JavaScript that captures credentials from form submissions.
+///
+/// Hooks into the 'submit' event on all forms containing a password
+/// input.  Also watches for click events on submit buttons (for sites
+/// that submit via JS rather than native form submission).
+///
+/// Google-specific handling: Google's login splits username and password
+/// across separate pages.  We stash the email entered on the identifier
+/// page into `sessionStorage` and retrieve it on the password page.
+/// We also match `[role="button"]` and `[jsaction]` elements that Google
+/// uses instead of standard `<button>` tags.
+const PASSWORD_CAPTURE_JS: &str = r#"(function() {
+    'use strict';
+    if (window.__wynnPwCapture) return;
+    window.__wynnPwCapture = true;
+
+    var STORAGE_KEY = '__wynnCapturedUser';
+
+    // ── Utility: find the best username on the current page ───────
+    function findUsername(scope) {
+        var sel = 'input[type="text"], input[type="email"], input[type="tel"], input:not([type])';
+        var inputs = (scope || document).querySelectorAll(sel);
+        for (var i = 0; i < inputs.length; i++) {
+            var inp = inputs[i];
+            // Skip hidden / off-screen inputs.
+            if (inp.value && inp.offsetParent !== null) {
+                return inp.value;
+            }
+        }
+        return '';
+    }
+
+    // ── Utility: find the password value on the current page ──────
+    function findPassword(scope) {
+        var pwFields = (scope || document).querySelectorAll('input[type="password"]');
+        var pw = '';
+        for (var i = 0; i < pwFields.length; i++) {
+            if (pwFields[i].value) pw = pwFields[i].value;
+        }
+        return pw;
+    }
+
+    // ── Utility: send credentials to Rust backend ────────────────
+    function sendCreds(user, pw) {
+        if (!pw) return;
+        try {
+            window.webkit.messageHandlers.wynnPasswordCapture.postMessage(
+                JSON.stringify({ username: user || '', password: pw })
+            );
+        } catch(err) {}
+    }
+
+    // ── Stash / recall username across page navigations ──────────
+    // Google (and similar) show email on page 1, password on page 2.
+    function stashUsername(user) {
+        if (user) {
+            try { sessionStorage.setItem(STORAGE_KEY, user); } catch(e) {}
+        }
+    }
+
+    function recallUsername() {
+        try { return sessionStorage.getItem(STORAGE_KEY) || ''; } catch(e) { return ''; }
+    }
+
+    // ── Attempt to capture credentials ──────────────────────────
+    function attemptCapture(scope) {
+        var pw = findPassword(scope);
+        if (!pw) return false;
+
+        var user = findUsername(scope);
+        if (!user) user = recallUsername();
+        sendCreds(user, pw);
+        return true;
+    }
+
+    // ── 1. Native form submit ────────────────────────────────────
+    document.addEventListener('submit', function(e) {
+        var form = e.target;
+        if (!form || form.tagName !== 'FORM') return;
+        // Before submitting: stash any username we see.
+        var user = findUsername(form);
+        stashUsername(user);
+        attemptCapture(form);
+    }, true);
+
+    // ── 2. Click on any submit-like element (broad matching) ────
+    //   Matches: <button>, <input type=submit>, [role="button"],
+    //   and Google's jsaction-powered divs.
+    document.addEventListener('click', function(e) {
+        var el = e.target.closest(
+            'button[type="submit"], input[type="submit"], ' +
+            'button:not([type]), [role="button"], [jsaction]'
+        );
+        if (!el) return;
+
+        // Check if there's a password field anywhere on the page.
+        var pw = findPassword();
+        if (pw) {
+            // Password page — capture and send.
+            var user = findUsername() || recallUsername();
+            sendCreds(user, pw);
+            return;
+        }
+
+        // No password field — maybe this is the "Next" button on the
+        // username step (Google-style).  Stash the username.
+        var user = findUsername();
+        stashUsername(user);
+    }, true);
+
+    // ── 3. Enter key on password field ──────────────────────────
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter') return;
+        var el = e.target;
+        if (!el || el.tagName !== 'INPUT') return;
+        if (el.type === 'password') {
+            var user = findUsername() || recallUsername();
+            sendCreds(user, el.value);
+        } else if (el.type === 'text' || el.type === 'email' || el.type === 'tel') {
+            // Pressing Enter on the username field — stash it.
+            stashUsername(el.value);
+        }
+    }, true);
+
+    // ── 4. Watch for dynamically inserted password fields ────────
+    //   Some sites (Google) add the password input only after the
+    //   username step completes.  When we see a new password field,
+    //   we attach a listener so we catch Enter presses even on
+    //   late-added inputs.
+    var observer = new MutationObserver(function(mutations) {
+        for (var i = 0; i < mutations.length; i++) {
+            var added = mutations[i].addedNodes;
+            for (var j = 0; j < added.length; j++) {
+                var node = added[j];
+                if (node.nodeType !== 1) continue;
+                var pws = node.querySelectorAll
+                    ? node.querySelectorAll('input[type="password"]')
+                    : [];
+                if (node.tagName === 'INPUT' && node.type === 'password') {
+                    // Direct password input added.
+                }
+                // No action needed — the keydown/click listeners on
+                // document already cover dynamically added elements.
+            }
+        }
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+})();"#;
+
+/// Register the password capture message handler on the shared
+/// UserContentManager.  Call this once during window setup.
+///
+/// When the injected JS detects a form submission with credentials,
+/// it sends a JSON message to this handler, which then triggers the
+/// "Save password?" prompt.
+///
+/// The capture JS is injected as a UserScript via the UCM so it runs
+/// automatically on every page load, bypasses CSP, and works even on
+/// pages like Google that have strict content security policies.
+pub fn register_password_capture_handler(
+    ucm: &UserContentManager,
+    window: &adw::ApplicationWindow,
+) {
+    // Register the script message handler name.
+    let _registered = ucm.register_script_message_handler("wynnPasswordCapture", None);
+
+    // Inject the password capture JS as a UserScript so it runs on
+    // every page load automatically (like the DNT / privacy scripts).
+    // UserScripts bypass CSP and run in every frame.
+    let capture_script = webkit6::UserScript::new(
+        PASSWORD_CAPTURE_JS,
+        webkit6::UserContentInjectedFrames::AllFrames,
+        webkit6::UserScriptInjectionTime::End,
+        &[], // allow-list: empty = all pages
+        &[], // block-list: empty = no exclusions
+    );
+    ucm.add_script(&capture_script);
+
+    let win = window.clone();
+
+    ucm.connect_script_message_received(Some("wynnPasswordCapture"), move |_ucm, js_value| {
+        // The JS sends a JSON string: {"username": "...", "password": "..."}
+        let json_str = js_value.to_str().to_string();
+
+        // Parse the JSON manually (no serde dependency).
+        let username = extract_json_field(&json_str, "username");
+        let password = extract_json_field(&json_str, "password");
+
+        if password.is_empty() {
+            return;
+        }
+
+        // Determine origin from the currently active tab's URI.
+        let origin = find_active_origin(&win);
+        if origin.is_empty() {
+            return;
+        }
+
+        if passwords::is_never_save(&origin) {
+            return;
+        }
+
+        passwords::show_save_password_prompt(&win, &origin, &username, &password);
+    });
+}
+
+/// Extract a string field value from a simple JSON object.
+/// Handles escaped quotes within values.
+fn extract_json_field(json: &str, field: &str) -> String {
+    let pattern = format!("\"{}\"", field);
+    if let Some(key_start) = json.find(&pattern) {
+        let after_key = &json[key_start + pattern.len()..];
+        // Skip whitespace and colon.
+        let after_colon = match after_key.find(':') {
+            Some(i) => &after_key[i + 1..],
+            None => return String::new(),
+        };
+        let trimmed = after_colon.trim_start();
+        if !trimmed.starts_with('"') {
+            return String::new();
+        }
+        let value_start = &trimmed[1..];
+        let mut result = String::new();
+        let mut chars = value_start.chars();
+        while let Some(c) = chars.next() {
+            match c {
+                '\\' => {
+                    if let Some(escaped) = chars.next() {
+                        result.push(escaped);
+                    }
+                }
+                '"' => break,
+                _ => result.push(c),
+            }
+        }
+        result
+    } else {
+        String::new()
+    }
+}
+
+/// Find the URI origin of the currently active tab in the window.
+fn find_active_origin(window: &adw::ApplicationWindow) -> String {
+    // Walk the widget tree to find the TabView, then get the selected page's WebView.
+    fn find_tab_view(widget: &gtk4::Widget) -> Option<adw::TabView> {
+        if let Some(tv) = widget.downcast_ref::<adw::TabView>() {
+            return Some(tv.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            if let Some(found) = find_tab_view(&c) {
+                return Some(found);
+            }
+            child = c.next_sibling();
+        }
+        None
+    }
+
+    if let Some(content) = window.content() {
+        if let Some(tab_view) = find_tab_view(content.upcast_ref()) {
+            if let Some(page) = tab_view.selected_page() {
+                if let Ok(wv) = page.child().downcast::<WebView>() {
+                    if let Some(uri) = wv.uri() {
+                        return passwords::extract_origin(&uri);
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 // ── Public API ──────────────────────────────────────────────────────
 
 /// Create a new browser tab inside `tab_view`.
@@ -82,6 +368,9 @@ pub fn add_tab(
     ));
 
     // ── 5. Signal: URI changed ──────────────────────────────────────
+    //   Re-inject autofill JS on SPA navigations (e.g. Google's
+    //   multi-step login where the URL changes via pushState but no
+    //   full page load occurs).
     wv.connect_uri_notify(clone!(
         #[weak]
         page,
@@ -90,10 +379,27 @@ pub fn add_tab(
         #[weak]
         security_icon,
         move |webview| {
-            if page.is_selected() {
-                if let Some(uri) = webview.uri() {
+            if let Some(uri) = webview.uri() {
+                if page.is_selected() {
                     url_entry.set_text(&uri);
                     update_security_icon(&security_icon, &uri);
+                }
+
+                // Re-inject autofill for SPA navigations.
+                // Password capture JS is handled via UCM UserScript.
+                if uri.starts_with("http://") || uri.starts_with("https://") {
+                    let origin = passwords::extract_origin(&uri);
+                    if let Some(js) = passwords::autofill_js(&origin) {
+                        webview.evaluate_javascript(
+                            &js,
+                            None,
+                            None,
+                            None::<&gio::Cancellable>,
+                            |_| {},
+                        );
+                    }
+                    // Don't prompt for unlock on SPA URI changes —
+                    // that's handled by the LoadEvent::Finished path.
                 }
             }
         }
@@ -138,10 +444,12 @@ pub fn add_tab(
                         let title = webview.title().map(|t| t.to_string()).unwrap_or_default();
                         history::record_visit(&uri, &title);
 
-                        // Inject autofill JS for saved passwords (HTTP/HTTPS only).
+                        // Autofill JS injection (HTTP/HTTPS only).
+                        // Password capture JS is handled via UCM UserScript.
                         if uri.starts_with("http://") || uri.starts_with("https://") {
                             let origin = passwords::extract_origin(&uri);
                             if let Some(js) = passwords::autofill_js(&origin) {
+                                // Store is unlocked and we have creds — inject.
                                 webview.evaluate_javascript(
                                     &js,
                                     None,
@@ -149,6 +457,23 @@ pub fn add_tab(
                                     None::<&gio::Cancellable>,
                                     |_| {},
                                 );
+                            } else if passwords::has_credentials_for(&origin) {
+                                // Store is locked but creds exist — prompt
+                                // for unlock, then inject autofill.
+                                let wv = webview.clone();
+                                let o = origin.clone();
+                                let wv2 = webview.clone();
+                                passwords::ensure_unlocked(&wv2, move || {
+                                    if let Some(js) = passwords::autofill_js(&o) {
+                                        wv.evaluate_javascript(
+                                            &js,
+                                            None,
+                                            None,
+                                            None::<&gio::Cancellable>,
+                                            |_| {},
+                                        );
+                                    }
+                                });
                             }
                         }
                     }
@@ -595,82 +920,15 @@ pub fn add_tab(
         true // Signal handled — suppress WebKit's default dialog.
     });
 
-    // ── 13. Signal: form submission → detect & save passwords ────────
-    wv.connect_submit_form(|webview, form_request| {
-        // Extract text fields from the form BEFORE calling submit().
-        let fields = form_request.list_text_fields();
-
-        // Always let the form submit proceed.
-        form_request.submit();
-
-        let (names, values) = match fields {
-            Some(pair) if !pair.0.is_empty() => pair,
-            _ => return,
-        };
-
-        // Find the password field(s) and username field.
-        let mut password = String::new();
-        let mut username = String::new();
-
-        let pw_hints = ["pass", "pwd", "password", "passwd", "secret"];
-        let user_hints = ["user", "email", "login", "name", "account", "id", "uname"];
-
-        for (i, name) in names.iter().enumerate() {
-            let n = name.to_lowercase();
-            let val = values.get(i).map(|v| v.to_string()).unwrap_or_default();
-
-            if pw_hints.iter().any(|h| n.contains(h)) {
-                if !val.is_empty() {
-                    password = val;
-                }
-            } else if user_hints.iter().any(|h| n.contains(h)) {
-                if !val.is_empty() {
-                    username = val;
-                }
-            }
-        }
-
-        // If no username found by name hints, use the first non-password
-        // field that has a value (common for forms with generic field names).
-        if username.is_empty() {
-            for (i, name) in names.iter().enumerate() {
-                let n = name.to_lowercase();
-                if !pw_hints.iter().any(|h| n.contains(h)) {
-                    let val = values.get(i).map(|v| v.to_string()).unwrap_or_default();
-                    if !val.is_empty() {
-                        username = val;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if password.is_empty() {
-            return; // No password field — not a login form.
-        }
-
-        // Get the page origin.
-        let origin = webview
-            .uri()
-            .map(|u| passwords::extract_origin(&u))
-            .unwrap_or_default();
-
-        if origin.is_empty() {
-            return;
-        }
-
-        // Check if user opted out of saving for this origin.
-        if passwords::is_never_save(&origin) {
-            return;
-        }
-
-        // Show the save/update password prompt.
-        if let Some(root) = webview.root() {
-            if let Some(win) = root.downcast_ref::<gtk4::Window>() {
-                passwords::show_save_password_prompt(win, &origin, &username, &password);
-            }
-        }
-    });
+    // ── 13. Password capture via JS message handler ───────────────────
+    //
+    // Instead of using connect_submit_form (which calls list_text_fields
+    // and segfaults on some sites like Google), we inject JavaScript that
+    // intercepts form submissions with password fields and sends the
+    // credentials back to Rust via the UserContentManager message handler
+    // system.  The JS is injected on every page load in the LoadEvent::Finished
+    // handler above; the message handler is registered once on the UCM in
+    // window.rs via register_password_capture_handler().
 
     // ── 14. Signal: HTTP authentication challenge → login dialog ─────
     wv.connect_authenticate(|webview, auth_request| {
